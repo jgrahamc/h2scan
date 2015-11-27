@@ -102,12 +102,14 @@ func (s *site) test(l *os.File) {
 	s.tlsWorks.ran = true
 	config := &tls.Config{}
 	config.ServerName = s.name
-	tc, err := tls.Dial("tcp", hostPort, config)
+	timeoutDialer := &net.Dialer{}
+	timeoutDialer.Timeout = 2 * time.Second
+	tc, err := tls.DialWithDialer(timeoutDialer, "tcp", hostPort, config)
 	if err != nil {
 		s.name = "www." + s.name
 		config.ServerName = s.name
 		hostPort = net.JoinHostPort(s.name, "443")
-		tc, err = tls.Dial("tcp", hostPort, config)
+		tc, err = tls.DialWithDialer(timeoutDialer, "tcp", hostPort, config)
 		if err != nil {
 			s.logf(l, "Error performing TLS connection: %s", err)
 			s.tlsWorks.yesno = false
@@ -130,7 +132,9 @@ func (s *site) test(l *os.File) {
 	// See if HTTPS works by performing GET /
 
 	s.httpsWorks.ran = true
-	resp, err := http.Get("https://" + s.name)
+	httpTransport := &http.Transport{}
+	req, _ := http.NewRequest("GET", "https://" + s.name, nil)
+	resp, err := httpTransport.RoundTrip(req)
 	if err != nil {
 		s.logf(l, "HTTP request failed: %s", err)
 		return
@@ -139,6 +143,7 @@ func (s *site) test(l *os.File) {
 		_, _ = ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
 	}
+	httpTransport.CloseIdleConnections()
 	s.httpsWorks.yesno = err == nil
 
 	// See if SPDY works by doing GET / over SPDY
@@ -147,8 +152,9 @@ func (s *site) test(l *os.File) {
 		s.spdyWorks.ran = true
 		conf := &tls.Config{}
 		conf.NextProtos = []string{"spdy/3.1"}
-		spdyC, err := tls.Dial("tcp", hostPort, conf)
+		spdyC, err := tls.DialWithDialer(timeoutDialer, "tcp", hostPort, conf)
 		if err == nil {
+			spdyC.SetDeadline(time.Now().Add(time.Minute)) 
 			defer spdyC.Close()
 			cs = spdyC.ConnectionState()
 			if cs.NegotiatedProtocol != "spdy/3.1" {
@@ -183,8 +189,9 @@ func (s *site) test(l *os.File) {
 		s.http2Works.ran = true
 		conf := &tls.Config{}
 		conf.NextProtos = []string{"h2"}
-		h2C, err := tls.Dial("tcp", hostPort, conf)
+		h2C, err := tls.DialWithDialer(timeoutDialer, "tcp", hostPort, conf)
 		if err == nil {
+			h2C.SetDeadline(time.Now().Add(time.Minute)) 
 			defer h2C.Close()
 			cs = h2C.ConnectionState()
 			if cs.NegotiatedProtocol != "h2" {
