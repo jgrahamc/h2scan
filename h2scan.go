@@ -105,6 +105,7 @@ func (s *site) test(l *os.File) {
 	tc, err := tls.Dial("tcp", hostPort, config)
 	if err != nil {
 		s.name = "www." + s.name
+		config.ServerName = s.name
 		hostPort = net.JoinHostPort(s.name, "443")
 		tc, err = tls.Dial("tcp", hostPort, config)
 		if err != nil {
