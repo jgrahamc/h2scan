@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 // in returns true is s is one of the strings in list
@@ -82,8 +83,10 @@ func (s *site) test(l *os.File) {
 
 	// See if port 443 is open, give up if it is not
 
+	hostPort := net.JoinHostPort(s.name, "443")
+	
 	s.port443Open.ran = true
-	c, err := net.Dial("tcp", net.JoinHostPort(s.name, "443"))
+	c, err := net.DialTimeout("tcp", hostPort, 2 * time.Second)
 	if err != nil {
 		s.logf(l, "TCP dial to port 443 failed: %s", err)
 		s.port443Open.yesno = false
@@ -93,16 +96,22 @@ func (s *site) test(l *os.File) {
 	s.port443Open.yesno = true
 
 	// See if TLS works and if SPDY/3.1 or HTTP/2 offered. Give up if
-	// TLS does not work
+	// TLS does not work. If the name doesn't work try adding www.  to
+	// se if it's a TLS certificate error.
 
 	s.tlsWorks.ran = true
 	config := &tls.Config{}
 	config.ServerName = s.name
-	tc, err := tls.Dial("tcp", net.JoinHostPort(s.name, "443"), config)
+	tc, err := tls.Dial("tcp", hostPort, config)
 	if err != nil {
-		s.logf(l, "Error performing TLS connection: %s", err)
-		s.tlsWorks.yesno = false
-		return
+		s.name = "www." + s.name
+		hostPort = net.JoinHostPort(s.name, "443")
+		tc, err = tls.Dial("tcp", hostPort, config)
+		if err != nil {
+			s.logf(l, "Error performing TLS connection: %s", err)
+			s.tlsWorks.yesno = false
+			return
+		}
 	}
 	s.tlsWorks.yesno = true
 
@@ -120,10 +129,14 @@ func (s *site) test(l *os.File) {
 	// See if HTTPS works by performing GET /
 
 	s.httpsWorks.ran = true
-	_, err = http.Get("https://" + s.name)
+	resp, err := http.Get("https://" + s.name)
 	if err != nil {
 		s.logf(l, "HTTP request failed: %s", err)
 		return
+	}
+	if resp != nil && resp.Body != nil {
+		_, _ = ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
 	}
 	s.httpsWorks.yesno = err == nil
 
@@ -133,8 +146,9 @@ func (s *site) test(l *os.File) {
 		s.spdyWorks.ran = true
 		conf := &tls.Config{}
 		conf.NextProtos = []string{"spdy/3.1"}
-		spdyC, err := tls.Dial("tcp", net.JoinHostPort(s.name, "443"), conf)
+		spdyC, err := tls.Dial("tcp", hostPort, conf)
 		if err == nil {
+			defer spdyC.Close()
 			cs = spdyC.ConnectionState()
 			if cs.NegotiatedProtocol != "spdy/3.1" {
 				s.logf(l, "NegotiatedProtocol not spdy/3.1: %s",
@@ -142,6 +156,7 @@ func (s *site) test(l *os.File) {
 			} else {
 				sc, err := spdy.NewClientConn(spdyC)
 				if err == nil {
+					defer sc.Close()
 					req, _ := http.NewRequest("GET", "https://"+s.name, nil)
 					resp, err := sc.Do(req)
 					if err != nil {
@@ -167,8 +182,9 @@ func (s *site) test(l *os.File) {
 		s.http2Works.ran = true
 		conf := &tls.Config{}
 		conf.NextProtos = []string{"h2"}
-		h2C, err := tls.Dial("tcp", net.JoinHostPort(s.name, "443"), conf)
+		h2C, err := tls.Dial("tcp", hostPort, conf)
 		if err == nil {
+			defer h2C.Close()
 			cs = h2C.ConnectionState()
 			if cs.NegotiatedProtocol != "h2" {
 				s.logf(l, "NegotiatedProtocol not h2: %s",

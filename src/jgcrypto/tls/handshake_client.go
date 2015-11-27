@@ -665,6 +665,10 @@ func mutualProtocol(protos, preferenceProtos []string) (string, bool) {
 	if len(protos) > 0 {
 		return protos[0], true
 	} else {
-		return preferenceProtos[len(preferenceProtos)-1], false
+		if len(preferenceProtos) > 0 {
+			return preferenceProtos[len(preferenceProtos)-1], false
+		} else {
+			return "http/1.1", true
+		}
 	}
 }
