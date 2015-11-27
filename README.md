@@ -19,8 +19,8 @@ concurrently for bulk testing.
 `-workers` sets the number of worker routines performing the
 testing. Defaults to 10.
 
-`fields` causes h2scan to output a header line in the CSV containing
+`-fields` causes h2scan to output a header line in the CSV containing
 field names.
 
-`log` gives the name of a file to which log information will be
+`-log` gives the name of a file to which log information will be
 written. If given the file is overwritten.
