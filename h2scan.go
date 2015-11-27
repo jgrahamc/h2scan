@@ -4,7 +4,8 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"github.com/amahi/spdy"
+	"github.com/SlyMarbo/spdy"
+	"github.com/SlyMarbo/spdy/common"
 	"golang.org/x/net/http2"
 	"io/ioutil"
 	"jgcrypto/tls"
@@ -161,11 +162,13 @@ func (s *site) test(l *os.File) {
 				s.logf(l, "NegotiatedProtocol not spdy/3.1: %s",
 					cs.NegotiatedProtocol)
 			} else {
-				sc, err := spdy.NewClientConn(spdyC)
+				sc, err := spdy.NewClientConn(spdyC, nil, 3, 1)
 				if err == nil {
 					defer sc.Close()
-					req, _ := http.NewRequest("GET", "https://"+s.name, nil)
-					resp, err := sc.Do(req)
+					go sc.Run()
+					req, _ := http.NewRequest("GET", "https://" + s.name, nil)
+					resp, err := sc.RequestResponse(req, nil,
+						common.DefaultPriority(req.URL))
 					if err != nil {
 						s.logf(l, "Failed to do SPDY request: %s", err)
 					}
@@ -270,7 +273,7 @@ func main() {
 
 	// The SPDY library is chatty so discard its log statements
 	
-	spdy.SetLog(ioutil.Discard)
+//	spdy.SetLog(ioutil.Discard)
 
 	fields := flag.Bool("fields", false,
 		"If set outputs a header line containing field names")
