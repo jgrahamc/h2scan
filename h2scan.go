@@ -54,40 +54,49 @@ func (t tri) String() string {
 // of various tests performed on the site. The states are only filled
 // in if test() is called on the site.
 type site struct {
-	name string        // DNS name of the web site
+	name string // DNS name of the web site
 
 	resolves       tri // Whether the name resolves
 	port443Open    tri // Whether port 443 is open via TCP
 	tlsWorks       tri // Whether a TLS connection works
 	httpsWorks     tri // Whether an HTTPS request works using HTTP/1.1
+	cloudflare     tri // Whether site is on CloudFlare or not
 	spdyAnnounced  tri // Whether spdy/3.1 is announced using NPN
 	http2Announced tri // Whether h2 is announced using NPN
 	spdyWorks      tri // Whether a SPDY/3.1 request works
 	http2Works     tri // Whether an HTTP/2 request works
-	
-	npn            []string // List of protocols advertised by server using NPN
+
+	npn []string // List of protocols advertised by server using NPN
 }
 
 // test tests a site to see if it supports various protocols
 func (s *site) test(l *os.File) {
 
-	// Check the name resolves, give up if it does not
+	// Check the name resolves, see, of www. prepended makes it
+	// resolve, give up if it does not
+
+	addedWWW := false
 
 	s.resolves.ran = true
 	_, err := net.LookupHost(s.name)
 	if err != nil {
-		s.logf(l, "Error resolving name: %s", err)
-		s.resolves.yesno = false
-		return
+		s.name = "www." + s.name
+		addedWWW = true
+		_, err = net.LookupHost(s.name)
+		if err != nil {
+			s.logf(l, "Error resolving name: %s", err)
+			s.resolves.yesno = false
+			return
+		}
 	}
 	s.resolves.yesno = true
 
 	// See if port 443 is open, give up if it is not
 
 	hostPort := net.JoinHostPort(s.name, "443")
-	
+
 	s.port443Open.ran = true
-	c, err := net.DialTimeout("tcp", hostPort, 2 * time.Second)
+	c, err := net.DialTimeout("tcp", hostPort, 2*time.Second)
 	if err != nil {
 		s.logf(l, "TCP dial to port 443 failed: %s", err)
 		s.port443Open.yesno = false
@@ -107,10 +116,14 @@ func (s *site) test(l *os.File) {
 	timeoutDialer.Timeout = 2 * time.Second
 	tc, err := tls.DialWithDialer(timeoutDialer, "tcp", hostPort, config)
 	if err != nil {
-		s.name = "www." + s.name
-		config.ServerName = s.name
-		hostPort = net.JoinHostPort(s.name, "443")
-		tc, err = tls.DialWithDialer(timeoutDialer, "tcp", hostPort, config)
+		if !addedWWW {
+			s.name = "www." + s.name
+			config.ServerName = s.name
+			hostPort = net.JoinHostPort(s.name, "443")
+			tc, err = tls.DialWithDialer(timeoutDialer, "tcp", hostPort, config)
+			addedWWW = true
+		}
+
 		if err != nil {
 			s.logf(l, "Error performing TLS connection: %s", err)
 			s.tlsWorks.yesno = false
@@ -121,7 +134,7 @@ func (s *site) test(l *os.File) {
 
 	// Retrieve the list of NPN offered protocols and check for
 	// spdy/3.1 and h2
-	
+
 	cs := tc.ConnectionState()
 	s.npn = cs.OfferedProtocols
 	s.spdyAnnounced.ran = true
@@ -134,7 +147,7 @@ func (s *site) test(l *os.File) {
 
 	s.httpsWorks.ran = true
 	httpTransport := &http.Transport{}
-	req, _ := http.NewRequest("GET", "https://" + s.name, nil)
+	req, _ := http.NewRequest("GET", "https://"+s.name, nil)
 	resp, err := httpTransport.RoundTrip(req)
 	if err != nil {
 		s.logf(l, "HTTP request failed: %s", err)
@@ -145,7 +158,14 @@ func (s *site) test(l *os.File) {
 		resp.Body.Close()
 	}
 	httpTransport.CloseIdleConnections()
-	s.httpsWorks.yesno = err == nil
+	s.httpsWorks.yesno = true
+
+	s.cloudflare.ran = true
+
+	servers := resp.Header["Server"]
+	if len(servers) > 0 {
+		s.cloudflare.yesno = servers[0] == "cloudflare-nginx"
+	}
 
 	// See if SPDY works by doing GET / over SPDY
 
@@ -155,7 +175,7 @@ func (s *site) test(l *os.File) {
 		conf.NextProtos = []string{"spdy/3.1"}
 		spdyC, err := tls.DialWithDialer(timeoutDialer, "tcp", hostPort, conf)
 		if err == nil {
-			spdyC.SetDeadline(time.Now().Add(time.Minute)) 
+			spdyC.SetDeadline(time.Now().Add(time.Minute))
 			defer spdyC.Close()
 			cs = spdyC.ConnectionState()
 			if cs.NegotiatedProtocol != "spdy/3.1" {
@@ -166,7 +186,7 @@ func (s *site) test(l *os.File) {
 				if err == nil {
 					defer sc.Close()
 					go sc.Run()
-					req, _ := http.NewRequest("GET", "https://" + s.name, nil)
+					req, _ := http.NewRequest("GET", "https://"+s.name, nil)
 					resp, err := sc.RequestResponse(req, nil,
 						common.DefaultPriority(req.URL))
 					if err != nil {
@@ -194,7 +214,7 @@ func (s *site) test(l *os.File) {
 		conf.NextProtos = []string{"h2"}
 		h2C, err := tls.DialWithDialer(timeoutDialer, "tcp", hostPort, conf)
 		if err == nil {
-			h2C.SetDeadline(time.Now().Add(time.Minute)) 
+			h2C.SetDeadline(time.Now().Add(time.Minute))
 			defer h2C.Close()
 			cs = h2C.ConnectionState()
 			if cs.NegotiatedProtocol != "h2" {
@@ -229,21 +249,21 @@ func (s *site) test(l *os.File) {
 // being logged
 func (s *site) logf(f *os.File, format string, a ...interface{}) {
 	if f != nil {
-		fmt.Fprintf(f, fmt.Sprintf(s.name + ": " + format + "\n", a...))
+		fmt.Fprintf(f, fmt.Sprintf(s.name+": "+format+"\n", a...))
 	}
 }
 
 // fields returns the list of fields that String() will return for a
 // site
 func (s *site) fields() string {
-	return "name,resolves,port443Open,tlsWorks,httpsWorks,spdyAnnounced,http2Announced,spdyWorks,http2Works,npn"
+	return "name,resolves,port443Open,tlsWorks,httpsWorks,cloudflare,spdyAnnounced,http2Announced,spdyWorks,http2Works,npn"
 }
 
 func (s *site) String() string {
-	return fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s",
+	return fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s",
 		s.name, s.resolves, s.port443Open, s.tlsWorks, s.httpsWorks,
-		s.spdyAnnounced, s.http2Announced, s.spdyWorks, s.http2Works,
-		strings.Join(s.npn, " "))
+		s.cloudflare, s.spdyAnnounced, s.http2Announced, s.spdyWorks,
+		s.http2Works, strings.Join(s.npn, " "))
 }
 
 var wg sync.WaitGroup
@@ -263,7 +283,7 @@ func writer(result chan *site, stop chan struct{}, fields bool) {
 			fmt.Printf("%s\n", s.fields())
 			first = false
 		}
-		
+
 		fmt.Printf("%s\n", s)
 	}
 	close(stop)
@@ -272,8 +292,8 @@ func writer(result chan *site, stop chan struct{}, fields bool) {
 func main() {
 
 	// The SPDY library is chatty so discard its log statements
-	
-//	spdy.SetLog(ioutil.Discard)
+
+	//	spdy.SetLog(ioutil.Discard)
 
 	fields := flag.Bool("fields", false,
 		"If set outputs a header line containing field names")
@@ -295,7 +315,7 @@ func main() {
 		}
 		defer l.Close()
 	}
-	
+
 	work := make(chan *site)
 	result := make(chan *site)
 	stop := make(chan struct{})
