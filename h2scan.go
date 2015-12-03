@@ -78,11 +78,12 @@ func (s *site) test(l *os.File) {
 	addedWWW := false
 
 	s.resolves.ran = true
-	_, err := net.LookupHost(s.name)
+	name := s.name
+	_, err := net.LookupHost(name)
 	if err != nil {
-		s.name = "www." + s.name
+		name = "www." + name
 		addedWWW = true
-		_, err = net.LookupHost(s.name)
+		_, err = net.LookupHost(name)
 		if err != nil {
 			s.logf(l, "Error resolving name: %s", err)
 			s.resolves.yesno = false
@@ -93,10 +94,10 @@ func (s *site) test(l *os.File) {
 
 	// See if port 443 is open, give up if it is not
 
-	hostPort := net.JoinHostPort(s.name, "443")
+	hostPort := net.JoinHostPort(name, "443")
 
 	s.port443Open.ran = true
-	c, err := net.DialTimeout("tcp", hostPort, 2*time.Second)
+	c, err := net.DialTimeout("tcp", hostPort, 5 * time.Second)
 	if err != nil {
 		s.logf(l, "TCP dial to port 443 failed: %s", err)
 		s.port443Open.yesno = false
@@ -111,15 +112,15 @@ func (s *site) test(l *os.File) {
 
 	s.tlsWorks.ran = true
 	config := &tls.Config{}
-	config.ServerName = s.name
+	config.ServerName = name
 	timeoutDialer := &net.Dialer{}
-	timeoutDialer.Timeout = 2 * time.Second
+	timeoutDialer.Timeout = 5 * time.Second
 	tc, err := tls.DialWithDialer(timeoutDialer, "tcp", hostPort, config)
 	if err != nil {
 		if !addedWWW {
-			s.name = "www." + s.name
-			config.ServerName = s.name
-			hostPort = net.JoinHostPort(s.name, "443")
+			name = "www." + name
+			config.ServerName = name
+			hostPort = net.JoinHostPort(name, "443")
 			tc, err = tls.DialWithDialer(timeoutDialer, "tcp", hostPort, config)
 			addedWWW = true
 		}
@@ -147,7 +148,7 @@ func (s *site) test(l *os.File) {
 
 	s.httpsWorks.ran = true
 	httpTransport := &http.Transport{}
-	req, _ := http.NewRequest("GET", "https://"+s.name, nil)
+	req, _ := http.NewRequest("GET", "https://" + name, nil)
 	resp, err := httpTransport.RoundTrip(req)
 	if err != nil {
 		s.logf(l, "HTTP request failed: %s", err)
@@ -186,7 +187,7 @@ func (s *site) test(l *os.File) {
 				if err == nil {
 					defer sc.Close()
 					go sc.Run()
-					req, _ := http.NewRequest("GET", "https://"+s.name, nil)
+					req, _ := http.NewRequest("GET", "http://" + name, nil)
 					resp, err := sc.RequestResponse(req, nil,
 						common.DefaultPriority(req.URL))
 					if err != nil {
@@ -224,7 +225,7 @@ func (s *site) test(l *os.File) {
 				h2t := &http2.Transport{}
 				h2c, err := h2t.NewClientConn(h2C)
 				if err == nil {
-					req, _ := http.NewRequest("GET", "https://"+s.name, nil)
+					req, _ := http.NewRequest("GET", "http://" + name, nil)
 					resp, err := h2c.RoundTrip(req)
 					if err != nil {
 						s.logf(l, "HTTP/2 RoundTrip failed: %s", err)
